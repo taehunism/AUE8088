@@ -144,14 +144,14 @@ def train(hyp, opt, device, callbacks):
     if pretrained:
         weights = attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
-        model = Model(cfg or ckpt["model"].yaml, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        model = Model(cfg or ckpt["model"].yaml, ch=6, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
         exclude = ["anchor"] if (cfg or hyp.get("anchors")) else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
     else:
-        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        model = Model(cfg, ch=6, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
     amp = check_amp(model)  # check AMP
 
     # Image size
@@ -268,11 +268,15 @@ def train(hyp, opt, device, callbacks):
         for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
             callbacks.run("on_train_batch_start")
             ni = i + nb * epoch  # number integrated batches (since train start)
+            if isinstance(imgs, tuple) and len(imgs) == 2:
+                imgs = torch.cat([imgs[0], imgs[1]], dim=1)  # (B, 6, H, W)
+            
+            imgs = imgs.to(device, non_blocking=True).float() / 255
 
-            if isinstance(imgs, list):
-                imgs = [img.to(device, non_blocking=True).float() / 255 for img in imgs]    # For RGB-T input
-            else:
-                imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+            # if isinstance(imgs, list):
+            #     imgs = [img.to(device, non_blocking=True).float() / 255 for img in imgs]    # For RGB-T input
+            # else:
+            #     imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
             if ni <= nw:
