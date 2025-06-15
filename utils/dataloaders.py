@@ -1193,98 +1193,246 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             if not f.exists():
                 np.save(f.as_posix(), cv2.imread(self.im_files[i].format(m)))
 
+    # def __getitem__(self, index):
+    #     """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
+    #     index = self.indices[index]  # linear, shuffled, or image_weights
+
+    #     hyp = self.hyp
+    #     mosaic = self.mosaic and random.random() < hyp["mosaic"]
+    #     if mosaic:
+    #         # raise NotImplementedError('Please make "mosaic" augmentation work!')
+
+    #         # TODO: Load mosaic
+    #         img, labels = self.load_mosaic(index)
+    #         shapes = None
+
+    #         # TODO: MixUp augmentation
+    #         if random.random() < hyp["mixup"]:
+    #             img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
+
+    #     else:
+    #         # Load image
+    #         # hw0s: original shapes, hw1s: resized shapes
+    #         imgs, hw0s, hw1s = self.load_image(index)
+
+    #         for ii, (img, (h0, w0), (h, w)) in enumerate(zip(imgs, hw0s, hw1s)):
+    #             # Letterbox
+    #             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
+    #             img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+    #             shapes = (h0, w0), (ratio, pad)  # for COCO mAP rescaling
+
+    #             labels = self.labels[index].copy()
+    #             if labels.size:  # normalized xywh to pixel xyxy format
+    #                 labels[:, 1:3] += labels[:, 3:5] / 2.0      # (x_lefttop, y_lefttop) -> (x_center, y_center)
+    #                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+
+    #             if self.augment:
+    #                 # raise NotImplementedError('Please make data augmentation work!')
+    #                 seed = np.random.randint(2147483647)
+    #                 np.random.seed(seed)
+    #                 imgs[0], targets = random_perspective(
+    #                     imgs[0], targets,
+    #                     degrees=self.hyp["degrees"],
+    #                     translate=self.hyp["translate"],
+    #                     scale=self.hyp["scale"],
+    #                     shear=self.hyp["shear"],
+    #                     perspective=self.hyp["perspective"]
+    #                 )
+    #                 np.random.seed(seed)
+    #                 imgs[1], _ = random_perspective(
+    #                     imgs[1], targets,
+    #                     degrees=self.hyp["degrees"],
+    #                     translate=self.hyp["translate"],
+    #                     scale=self.hyp["scale"],
+    #                     shear=self.hyp["shear"],
+    #                     perspective=self.hyp["perspective"]
+    #                 )
+    #                 # 추가 증강: HSV, Flip 등
+    #                 augment_hsv(imgs[0], hgain=self.hyp["hsv_h"], sgain=self.hyp["hsv_s"], vgain=self.hyp["hsv_v"])
+    #                 augment_hsv(imgs[1], hgain=self.hyp["hsv_h"], sgain=self.hyp["hsv_s"], vgain=self.hyp["hsv_v"])
+    #                 if random.random() < self.hyp["fliplr"]:
+    #                     imgs[0] = np.fliplr(imgs[0])
+    #                     imgs[1] = np.fliplr(imgs[1])
+    #                     if len(targets):
+    #                         targets[:, 1] = 1 - targets[:, 1]
+    #                 # img, labels = random_perspective(
+    #                 #     img,
+    #                 #     labels,
+    #                 #     degrees=hyp["degrees"],
+    #                 #     translate=hyp["translate"],
+    #                 #     scale=hyp["scale"],
+    #                 #     shear=hyp["shear"],
+    #                 #     perspective=hyp["perspective"],
+    #                 # )
+
+    #             nl = len(labels)  # number of labels
+    #             if nl:
+    #                 labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
+
+    #             if self.augment:
+    #                 # Albumentations
+    #                 img, labels = self.albumentations(img, labels)
+    #                 nl = len(labels)  # update after albumentations
+
+    #                 # HSV color-space
+    #                 augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
+
+    #                 # Flip up-down
+    #                 if random.random() < hyp["flipud"]:
+    #                     img = np.flipud(img)
+    #                     if nl:
+    #                         labels[:, 2] = 1 - labels[:, 2]
+
+    #                 # Flip left-right
+    #                 if random.random() < hyp["fliplr"]:
+    #                     img = np.fliplr(img)
+    #                     if nl:
+    #                         labels[:, 1] = 1 - labels[:, 1]
+
+    #                 # Cutouts
+    #                 # labels = cutout(img, labels, p=0.5)
+    #                 # nl = len(labels)  # update after cutout
+
+    #             labels_out = torch.zeros((nl, 7))
+    #             if nl:
+    #                 labels_out[:, 1:] = torch.from_numpy(labels)
+
+    #             # Convert
+    #             img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+    #             img = np.ascontiguousarray(img)
+
+    #             imgs[ii] = torch.from_numpy(img)
+
+    #     # Drop occlusion level
+    #     labels_out = labels_out[:, :-1]
+    #     return imgs, labels_out, self.im_files[index], shapes, index
+
     def __getitem__(self, index):
-        """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
-        index = self.indices[index]  # linear, shuffled, or image_weights
-
+        index = self.indices[index]
         hyp = self.hyp
-        mosaic = self.mosaic and random.random() < hyp["mosaic"]
-        if mosaic:
-            raise NotImplementedError('Please make "mosaic" augmentation work!')
 
-            # TODO: Load mosaic
-            img, labels = self.load_mosaic(index)
-            shapes = None
+        # Load image
+        imgs, hw0s, hw1s = self.load_image(index)
+        labels = self.labels[index].copy()
 
-            # TODO: MixUp augmentation
-            if random.random() < hyp["mixup"]:
-                img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
+        # Letterbox (resize and pad) - 각 이미지마다 동일한 ratio, pad 적용
+        shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size
+        ratios, pads = [], []
+        for i, (img, (h0, w0), (h, w)) in enumerate(zip(imgs, hw0s, hw1s)):
+            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+            imgs[i] = img
+            ratios.append(ratio)
+            pads.append(pad)
 
-        else:
-            # Load image
-            # hw0s: original shapes, hw1s: resized shapes
-            imgs, hw0s, hw1s = self.load_image(index)
+        # Labels 변환 (첫 번째 이미지 기준)
+        if labels.size:
+            labels[:, 1:3] += labels[:, 3:5] / 2.0  # (x_lefttop, y_lefttop) -> (x_center, y_center)
+            labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratios[0][0] * hw1s[0][1], ratios[0][1] * hw0s[0][0], padw=pads[0][0], padh=pads[0][1])
 
-            for ii, (img, (h0, w0), (h, w)) in enumerate(zip(imgs, hw0s, hw1s)):
-                # Letterbox
-                shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-                img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
-                shapes = (h0, w0), (ratio, pad)  # for COCO mAP rescaling
+        # Data augmentation (RGB와 Thermal 동기화)
+        if self.augment:
+            seed = np.random.randint(2147483647)
+            np.random.seed(seed)
+            random.seed(seed)
+            # RGB(visible)에 증강 적용
+            imgs[0], labels = random_perspective(
+                imgs[0], labels,
+                degrees=hyp["degrees"],
+                translate=hyp["translate"],
+                scale=hyp["scale"],
+                shear=hyp["shear"],
+                perspective=hyp["perspective"]
+            )
+            np.random.seed(seed)
+            random.seed(seed)
+            # Thermal(lwir)에 동일한 증강 적용
+            imgs[1], _ = random_perspective(
+                imgs[1], labels,
+                degrees=hyp["degrees"],
+                translate=hyp["translate"],
+                scale=hyp["scale"],
+                shear=hyp["shear"],
+                perspective=hyp["perspective"]
+            )
 
-                labels = self.labels[index].copy()
-                if labels.size:  # normalized xywh to pixel xyxy format
-                    labels[:, 1:3] += labels[:, 3:5] / 2.0      # (x_lefttop, y_lefttop) -> (x_center, y_center)
-                    labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+            # HSV augmentation (RGB만 적용, Thermal은 필요 없음)
+            augment_hsv(imgs[0], hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
 
-                if self.augment:
-                    raise NotImplementedError('Please make data augmentation work!')
+            # Flip (좌우 반전) - 두 이미지 모두 적용
+            if random.random() < hyp["fliplr"]:
+                imgs[0] = np.fliplr(imgs[0])
+                imgs[1] = np.fliplr(imgs[1])
+                if labels.size:
+                    labels[:, 1] = 1 - labels[:, 1]
 
-                    img, labels = random_perspective(
-                        img,
-                        labels,
-                        degrees=hyp["degrees"],
-                        translate=hyp["translate"],
-                        scale=hyp["scale"],
-                        shear=hyp["shear"],
-                        perspective=hyp["perspective"],
-                    )
+            # Flip (상하 반전) - 두 이미지 모두 적용
+            if random.random() < hyp["flipud"]:
+                imgs[0] = np.flipud(imgs[0])
+                imgs[1] = np.flipud(imgs[1])
+                if labels.size:
+                    labels[:, 2] = 1 - labels[:, 2]
 
-                nl = len(labels)  # number of labels
-                if nl:
-                    labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
+        # Labels 좌표 변환 (xyxy -> xywhn)
+        if labels.size:
+            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=imgs[0].shape[1], h=imgs[0].shape[0], clip=True, eps=1e-3)
 
-                if self.augment:
-                    # Albumentations
-                    img, labels = self.albumentations(img, labels)
-                    nl = len(labels)  # update after albumentations
+        # 텐서 변환
+        imgs_tensor = []
+        for img in imgs:
+            img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+            img = np.ascontiguousarray(img)
+            imgs_tensor.append(torch.from_numpy(img))
+        labels_out = torch.zeros((len(labels), 7)) if labels.size else torch.zeros((0, 7))
+        if labels.size:
+            labels_out[:, 1:] = torch.from_numpy(labels)
+        # occlusion level 제외 (필요시 labels_out[:, :-1]로 반환)
+        # return imgs_tensor, labels_out[:, :-1], self.im_files[index], (hw0s, ratios, pads), index
+        # shapes = []
+        # for hw0, ratio, pad in zip(hw0s, ratios, pads):
+        #     shapes.append(((hw0[0], hw0[1]), (ratio, pad)))  # ((h0, w0), (ratio, pad))
+        return (
+            imgs_tensor,
+            labels_out[:, :-1],
+            self.im_files[index],
+            (tuple(hw0s[0]), (tuple(ratios[0]), tuple(pads[0]))),  # (hw0, (ratio, pad))
+            index
+        )
+    # def load_image(self, i):
+    #     """
+    #     Loads an image by index, returning the image, its original dimensions, and resized dimensions.
 
-                    # HSV color-space
-                    augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
+    #     Returns (im, original hw, resized hw)
+    #     """
+    #     imgs, f, fns = (
+    #         self.ims[i],
+    #         self.im_files[i],
+    #         self.npy_files[i],
+    #     )
 
-                    # Flip up-down
-                    if random.random() < hyp["flipud"]:
-                        img = np.flipud(img)
-                        if nl:
-                            labels[:, 2] = 1 - labels[:, 2]
+    #     if any(img is None for img in imgs):  # not cached in RAM
+    #         if all(fn.exists() for fn in fns):  # load npy
+    #             imgs = [np.load(fn) for fn in fns]
+    #         else:  # read image
+    #             imgs = [cv2.imread(f.format(m)) for m in self.modalities]  # BGR
+    #             assert all(img is not None for img in imgs), f"Image Not Found {f}"
 
-                    # Flip left-right
-                    if random.random() < hyp["fliplr"]:
-                        img = np.fliplr(img)
-                        if nl:
-                            labels[:, 1] = 1 - labels[:, 1]
+    #         h0s, w0s = [], []
+    #         img_shapes = []
+    #         for i, img in enumerate(imgs):
+    #             h0, w0 = img.shape[:2]  # orig hw
+    #             r = self.img_size / max(h0, w0)  # ratio
+    #             if r != 1:  # if sizes are not equal
+    #                 interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
+    #                 imgs[i] = cv2.resize(img, (math.ceil(w0 * r), math.ceil(h0 * r)), interpolation=interp)
+    #             h0s.append(h0)
+    #             w0s.append(w0)
+    #             img_shapes.append(imgs[i].shape[:2])
+    #         return imgs, (h0s, w0s), img_shapes
 
-                    # Cutouts
-                    # labels = cutout(img, labels, p=0.5)
-                    # nl = len(labels)  # update after cutout
-
-                labels_out = torch.zeros((nl, 7))
-                if nl:
-                    labels_out[:, 1:] = torch.from_numpy(labels)
-
-                # Convert
-                img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
-                img = np.ascontiguousarray(img)
-
-                imgs[ii] = torch.from_numpy(img)
-
-        # Drop occlusion level
-        labels_out = labels_out[:, :-1]
-        return imgs, labels_out, self.im_files[index], shapes, index
-
+    #     return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
     def load_image(self, i):
         """
         Loads an image by index, returning the image, its original dimensions, and resized dimensions.
-
         Returns (im, original hw, resized hw)
         """
         imgs, f, fns = (
@@ -1299,7 +1447,13 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             else:  # read image
                 imgs = [cv2.imread(f.format(m)) for m in self.modalities]  # BGR
                 assert all(img is not None for img in imgs), f"Image Not Found {f}"
+                # Thermal 이미지가 1채널이면 3채널로 변환
+                if imgs[1].ndim == 2:
+                    imgs[1] = cv2.cvtColor(imgs[1], cv2.COLOR_GRAY2BGR)
 
+            # 이미지 ID 매핑을 위해 파일명 추출
+            self.im_files[i] = f.split('{')[0]  # 예: 'set06_V000_I00019'
+            # return imgs, (h0s, w0s), img_shapes
             h0s, w0s = [], []
             img_shapes = []
             for i, img in enumerate(imgs):
@@ -1312,10 +1466,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                 w0s.append(w0)
                 img_shapes.append(imgs[i].shape[:2])
             return imgs, (h0s, w0s), img_shapes
-
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
-
-
+    
     @staticmethod
     def collate_fn(batch):
         """Batches images, labels, paths, shapes, and indices assigning unique indices to targets in merged label tensor."""

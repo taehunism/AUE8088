@@ -983,6 +983,9 @@ def scale_segments(img1_shape, segments, img0_shape, ratio_pad=None, normalize=F
 
 
 def clip_boxes(boxes, shape):
+    # taehun edit
+    if isinstance(shape, (list, np.ndarray)):  # 리스트/넘파이 배열인 경우
+        shape = tuple(shape)  # 튜플로 변환
     """Clips bounding box coordinates (xyxy) to fit within the specified image shape (height, width)."""
     if isinstance(boxes, torch.Tensor):  # faster individually
         boxes[..., 0].clamp_(0, shape[1])  # x1

@@ -41,12 +41,19 @@ class KAISTParams(Params):
 
         # Override variables for KAISTPed benchmark
         self.iouThrs = np.linspace(.5, 0.95, int(np.round((0.95 - .5) / .05)) + 1, endpoint=True)
+        # self.iouThrs = np.linspace(0.5, 0.95, 10)  # IoU 임계값 조정
+        
         self.maxDets = [1000]
 
         # KAISTPed specific settings
         self.fppiThrs = np.array([0.0100, 0.0178, 0.0316, 0.0562, 0.1000, 0.1778, 0.3162, 0.5623, 1.0000])
         self.HtRng = [[55, 1e5 ** 2], [50, 75], [50, 1e5 ** 2], [20, 1e5 ** 2]]
         self.OccRng = [[0, 1], [0, 1], [2], [0, 1, 2]]
+        # self.fppiThrs = np.array([0.01, 0.1, 1.0])  # FPPI 범위 단순화
+        # self.HtRng = [[20, 1e5]]  # 모든 키 허용
+        # self.OccRng = [[0, 1, 2]]  # 모든 가림막 처리 포함
+
+        
         self.SetupLbl = ['Reasonable', 'Reasonable_small', 'Reasonable_occ=heavy', 'All']
 
         self.bndRng = [5, 5, 635, 507]  # discard bbs outside this pixel range
@@ -390,6 +397,9 @@ class KAISTPedEval(COCOeval):
         _pe = self._paramsEval
         # catIds = [1]                    # _pe.catIds if _pe.useCats else [-1]
         catIds = [0]                    # _pe.catIds if _pe.useCats else [-1]
+        
+        # catIds = _pe.catIds
+        
         setK = set(catIds)
         setM = set(_pe.maxDets)
         setI = set(_pe.imgIds)
@@ -586,6 +596,9 @@ def evaluate(test_annotation_file: str, user_submission_file: str, phase_codenam
     kaistEval = KAISTPedEval(kaistGt, kaistDt, 'bbox', method)
 
     kaistEval.params.catIds = [0]
+    # kaistEval.params.catIds = [0, 1, 2, 3]
+    
+
 
     eval_result = {
         'all': copy.deepcopy(kaistEval),
@@ -635,7 +648,8 @@ def evaluate(test_annotation_file: str, user_submission_file: str, phase_codenam
 
     print('')
     # eval_result['night'].params.imgIds = imgIds[1455:]
-    eval_result['day'].params.imgIds = [ii for ii, img in kaistGt.imgs.items() if get_time_of_day(img['im_name']) == 'night']
+    # eval_result['day'].params.imgIds = [ii for ii, img in kaistGt.imgs.items() if get_time_of_day(img['im_name']) == 'night']
+    eval_result['night'].params.imgIds = [ii for ii, img in kaistGt.imgs.items() if get_time_of_day(img['im_name']) == 'night']
     eval_result['night'].evaluate(0)
     eval_result['night'].accumulate()
     MR_night = eval_result['night'].summarize(0, subsetStr='Night')

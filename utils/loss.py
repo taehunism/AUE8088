@@ -133,6 +133,12 @@ class ComputeLoss:
 
     def __call__(self, p, targets):  # predictions, targets
         """Performs forward pass, calculating class, box, and object loss for given predictions and targets."""
+        if targets.shape[0] > 0:  # 타겟이 있는 경우에만 필터링
+            ignore_class = 3  # 'person?' 클래스 ID
+            mask = targets[:, 1] == ignore_class
+            if mask.any():
+                targets = targets[~mask]  # 'person?' 클래스 제거
+                
         lcls = torch.zeros(1, device=self.device)  # class loss
         lbox = torch.zeros(1, device=self.device)  # box loss
         lobj = torch.zeros(1, device=self.device)  # object loss

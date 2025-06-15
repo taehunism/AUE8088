@@ -1,28 +1,13 @@
+#!/usr/bin/env python
 # YOLOv5 🚀 by Ultralytics, AGPL-3.0 license
+
 """
-Validate a trained YOLOv5 detection model on a detection dataset.
-
-Usage:
-    $ python val.py --weights yolov5s.pt --data coco128.yaml --img 640
-
-Usage - formats:
-    $ python val.py --weights yolov5s.pt                 # PyTorch
-                              yolov5s.torchscript        # TorchScript
-                              yolov5s.onnx               # ONNX Runtime or OpenCV DNN with --dnn
-                              yolov5s_openvino_model     # OpenVINO
-                              yolov5s.engine             # TensorRT
-                              yolov5s.mlmodel            # CoreML (macOS-only)
-                              yolov5s_saved_model        # TensorFlow SavedModel
-                              yolov5s.pb                 # TensorFlow GraphDef
-                              yolov5s.tflite             # TensorFlow Lite
-                              yolov5s_edgetpu.tflite     # TensorFlow Edge TPU
-                              yolov5s_paddle_model       # PaddlePaddle
+KAIST Multispectral Pedestrian Detection을 위한 간소화된 검증 스크립트
 """
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -59,66 +44,28 @@ from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, smart_inference_mode
 
 
-def save_one_txt(predn, save_conf, shape, file):
-    """Saves one detection result to a txt file in normalized xywh format, optionally including confidence."""
-    gn = torch.tensor(shape)[[1, 0, 1, 0]]  # normalization gain whwh
-    for *xyxy, conf, cls in predn.tolist():
-        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-        with open(file, "a") as f:
-            f.write(("%g " * len(line)).rstrip() % line + "\n")
-
-
-def save_one_json(predn, jdict, path, index, class_map, ann_mapping):
+def save_one_json(predn, jdict, path, index, class_map):
     """
-    Saves one JSON detection result with image ID, category ID, bounding box, and score.
-
-    Example: {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
+    JSON 형식으로 예측 결과 저장
     """
-
-    image_name = Path(path).stem
-    full_image_name = f"{image_name}.jpg"
-    image_id = ann_mapping.get(full_image_name, -1)  # 딕셔너리에서 즉시 조회
-    
-    if image_id == -1:
-        print(f"Warning: Image {full_image_name} not found in annotations")
-        return
-
-    for p, b in zip(predn.tolist(), predn[:, :4].tolist()):  # ✅ predn에서 bbox 추출
+    image_id = int(path.stem) if path.stem.isnumeric() else path.stem
+    box = xyxy2xywh(predn[:, :4])  # xywh
+    box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
+    for p, b in zip(predn.tolist(), box.tolist()):
+        if p[4] < 0.001:  # 낮은 confidence 필터링
+            continue
         jdict.append({
-            "image_name": image_name,
-            "image_id": int(image_id),
-            "category_id": 0,  # 'person' 클래스 고정
+            "image_name": image_id,
+            "image_id": int(index),
+            "category_id": class_map[int(p[5])],
             "bbox": [round(x, 3) for x in b],
-            "score": round(p[4], 5)
+            "score": round(p[4], 5),
         })
-
-    # image_id = int(path.stem) if path.stem.isnumeric() else path.stem
-    # box = xyxy2xywh(predn[:, :4])  # xywh
-    # box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
-    # for p, b in zip(predn.tolist(), box.tolist()):
-    #     if p[4] < 0.1:
-    #         continue
-    #     jdict.append(
-    #         {
-    #             "image_name": image_id,
-    #             "image_id": int(index),
-    #             "category_id": class_map[int(p[5])],
-    #             "bbox": [round(x, 3) for x in b],
-    #             "score": round(p[4], 5),
-    #         }
-    #     )
 
 
 def process_batch(detections, labels, iouv):
     """
-    Return correct prediction matrix.
-
-    Arguments:
-        detections (array[N, 6]), x1, y1, x2, y2, conf, class
-        labels (array[M, 5]), class, x1, y1, x2, y2
-    Returns:
-        correct (array[N, 10]), for 10 IoU levels
+    예측과 실제 라벨 비교하여 정확도 계산
     """
     correct = np.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
     iou = box_iou(labels[:, 1:], detections[:, :4])
@@ -129,9 +76,8 @@ def process_batch(detections, labels, iouv):
             matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-                # matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+            matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+            matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
             correct[matches[:, 1].astype(int), i] = True
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
 
@@ -166,56 +112,73 @@ def run(
     plots=True,
     callbacks=Callbacks(),
     compute_loss=None,
+    rgbt=False,  # RGBT 입력 사용 여부
     epoch=None,
 ):
-    # Initialize/load model and set device
+    # 모델 초기화/로드 및 장치 설정
     training = model is not None
-    if training:  # called by train.py
-        device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
-        half &= device.type != "cpu"  # half precision only supported on CUDA
+    if training:  # train.py에서 호출된 경우
+        device, pt, jit, engine = next(model.parameters()).device, True, False, False  # 모델 장치 가져오기
+        half &= device.type != "cpu"  # CPU에서는 half precision 지원 안함
         model.half() if half else model.float()
-    else:  # called directly
+    else:  # 직접 호출된 경우
         device = select_device(device, batch_size=batch_size)
 
-        # Directories
-        save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
-        (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+    # 디렉토리
+    save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # 실행 증가
+    (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # 디렉토리 생성
 
-        # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
-        stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
-        imgsz = check_img_size(imgsz, s=stride)  # check image size
-        half = model.fp16  # FP16 supported on limited backends with CUDA
-        if engine:
-            batch_size = model.batch_size
-        else:
-            device = model.device
-            if not (pt or jit):
-                batch_size = 1  # export.py models default to batch-size 1
-                LOGGER.info(f"Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models")
+    # 모델 로드
+    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+    stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
+    imgsz = check_img_size(imgsz, s=stride)  # 이미지 크기 확인
+    half = model.fp16  # FP16 지원 여부
+    if engine:
+        batch_size = model.batch_size
+    else:
+        device = model.device
+        if not (pt or jit):
+            batch_size = 1  # export.py 모델은 기본적으로 batch-size 1
+            LOGGER.info(f"Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models")
 
-        # Data
-        data = check_dataset(data)  # check
+    # 데이터
+    data = check_dataset(data)  # 데이터셋 확인
 
-    # Configure
+    # 설정
     model.eval()
     cuda = device.type != "cpu"
-    is_coco = isinstance(data.get("val"), str) and data["val"].endswith(f"coco{os.sep}val2017.txt")  # COCO dataset
-    nc = 1 if single_cls else int(data["nc"])  # number of classes
-    iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
+    is_coco = isinstance(data.get("val"), str) and data["val"].endswith(f"coco{os.sep}val2017.txt")  # COCO 데이터셋
+    nc = 1 if single_cls else int(data["nc"])  # 클래스 수
+    iouv = torch.linspace(0.5, 0.95, 10, device=device)  # IoU 벡터 (mAP@0.5:0.95)
     niou = iouv.numel()
 
-    # Dataloader
+    # 데이터로더
     if not training:
-        if pt and not single_cls:  # check --weights are trained on --data
+        if pt and not single_cls:  # 모델이 데이터셋에 맞게 학습되었는지 확인
             ncm = model.model.nc
             assert ncm == nc, (
                 f"{weights} ({ncm} classes) trained on different --data than what you passed ({nc} "
                 f"classes). Pass correct combination of --weights and --data that are trained together."
             )
-        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz))  # warmup
-        pad, rect = (0.0, False) if task == "speed" else (0.5, pt)  # square inference for benchmarks
-        task = task if task in ("train", "val", "test") else "val"  # path to train/val/test images
+        
+        # 모델 웜업
+        if isinstance(imgsz, int):
+            imgsz = [imgsz, imgsz]  # 정사각형 추론
+        
+        # RGBT 입력 처리를 위한 웜업 수정
+        if rgbt:
+            # RGB + Thermal 입력을 위한 웜업
+            im = torch.zeros(1, 3, imgsz[0], imgsz[1], device=device)  # RGB 이미지용
+            thermal = torch.zeros(1, 3, imgsz[0], imgsz[1], device=device)  # Thermal 이미지를 3채널로 확장
+            model([im, thermal])  # 리스트로 전달하여 웜업
+        else:
+            # 일반 RGB 입력을 위한 웜업
+            model.warmup(imgsz=(1, 3, imgsz[0], imgsz[1]))
+        
+        pad, rect = (0.0, False) if task == "speed" else (0.5, pt)  # 벤치마크를 위한 정사각형 추론
+        task = task if task in ("train", "val", "test") else "val"  # train/val/test 이미지 경로
+        
+        # 데이터로더 생성
         dataloader = create_dataloader(
             data[task],
             imgsz,
@@ -226,177 +189,165 @@ def run(
             rect=rect,
             workers=workers,
             prefix=colorstr(f"{task}: "),
+            rgbt_input=rgbt,  # RGBT 입력 활성화
         )[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = model.names if hasattr(model, "names") else model.module.names  # get class names
-    if isinstance(names, (list, tuple)):  # old format
+    names = model.names if hasattr(model, "names") else model.module.names  # 클래스 이름 가져오기
+    if isinstance(names, (list, tuple)):  # 이전 형식
         names = dict(enumerate(names))
     class_map = list(range(1000))
     s = ("%22s" + "%11s" * 6) % ("Class", "Images", "Instances", "P", "R", "mAP50", "mAP50-95")
     tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    dt = Profile(device=device), Profile(device=device), Profile(device=device)  # profiling times
+    dt = Profile(device=device), Profile(device=device), Profile(device=device)  # 프로파일링 시간
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     callbacks.run("on_val_start")
-    pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-
-    # ann 
-    # 어노테이션 데이터 미리 로드
-    with open('utils/eval/KAIST_val-D_annotation.json', 'r') as f:
-        ann = json.load(f)
-    # 이미지 이름 → ID 매핑 테이블 생성
-    ann_mapping = {img['im_name']: img['id'] for img in ann['images']}  # ✅ 최적화
-
+    pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # 진행 표시줄
+    
     for batch_i, (ims, targets, paths, shapes, indices) in enumerate(pbar):
         callbacks.run("on_val_batch_start")
         with dt[0]:
-            if isinstance(ims, list):
-                ims = [im.to(device, non_blocking=True).float() / 255 for im in ims]    # For RGB-T input
-                nb, _, height, width = ims[0].shape  # batch size, channels, height, width
+            if rgbt:  # RGBT 입력 처리
+                ims = [im.to(device, non_blocking=True).float() / 255 for im in ims]  # RGB-T 입력
+                nb, _, height, width = ims[0].shape  # 배치 크기, 채널, 높이, 너비
                 if half:
                     ims = [im.half() for im in ims]
-            else:
+            else:  # 일반 RGB 입력 처리
                 ims = ims.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
-                nb, _, height, width = ims.shape  # batch size, channels, height, width
+                nb, _, height, width = ims.shape  # 배치 크기, 채널, 높이, 너비
                 if half:
                     ims = ims.half()
-
+            
             targets = targets.to(device)
 
-        # Inference
+        # 추론
         with dt[1]:
             preds, train_out = model(ims) if compute_loss else (model(ims, augment=augment), None)
 
-        # Loss
+        # 손실
         if compute_loss:
             loss += compute_loss(train_out, targets)[1]  # box, obj, cls
 
         # NMS
-        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
-        lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
+        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # 픽셀로 변환
+        lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # 자동 라벨링용
         with dt[2]:
             preds = non_max_suppression(
                 preds, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls, max_det=max_det
             )
 
-        if isinstance(ims, list):
-            ims = ims[0]    # thermal image
+        # RGBT 입력 처리
+        if rgbt:
+            ims = ims[0]  # thermal 이미지
 
-        # Metrics
+        # 메트릭
         for si, pred in enumerate(preds):
             labels = targets[targets[:, 0] == si, 1:]
-            nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
+            nl, npr = labels.shape[0], pred.shape[0]  # 라벨 수, 예측 수
             path, shape = Path(paths[si]), shapes[si][0]
             index = indices[si]
-            correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
+            correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # 초기화
             seen += 1
 
             if npr == 0:
                 if nl:
                     stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
-                    if plots:
-                        confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                if plots:
+                    confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
                 continue
 
-            # Predictions
+            # 예측
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            
-            # taehun edit
-            # scale_boxes(ims[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
-            shape, ratio_pad = shapes[si][0], shapes[si][1]
-            scale_boxes(ims[si].shape[1:], predn[:, :4], shape, ratio_pad)
-            
-            # Evaluate
+            scale_boxes(ims[si].shape[1:] if rgbt else ims.shape[2:], predn[:, :4], shape, shapes[si][1])  # 원본 공간 예측
+
+            # 평가
             if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-                scale_boxes(ims[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
-                labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                tbox = xywh2xyxy(labels[:, 1:5])  # 타겟 박스
+                scale_boxes(ims[si].shape[1:] if rgbt else ims.shape[2:], tbox, shape, shapes[si][1])  # 원본 공간 라벨
+                labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # 원본 공간 라벨
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
                     confusion_matrix.process_batch(predn, labelsn)
             stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
-            # Save/log
+            # 저장/로그
             if save_txt:
-                (save_dir / "labels").mkdir(parents=True, exist_ok=True)
                 save_one_txt(predn, save_conf, shape, file=save_dir / "labels" / f"{path.stem}.txt")
             if save_json:
-                save_one_json(predn, jdict, path, index, class_map, ann_mapping)
-                # save_one_json(predn, jdict, path, index, class_map)  # append to COCO-JSON dictionary
-            callbacks.run("on_val_image_end", pred, predn, path, names, ims[si])
+                save_one_json(predn, jdict, path, index, class_map)  # COCO-JSON 사전에 추가
+            callbacks.run("on_val_image_end", pred, predn, path, names, ims[si] if rgbt else ims[si])
 
-        # Plot images
+        # 이미지 플롯
         if plots and batch_i < 3:
             desc = f"val_batch{batch_i}" if epoch is None else f"val_epoch{epoch}_batch{batch_i}"
-            plot_images(ims, targets, paths, save_dir / f"{desc}_labels.jpg", names)  # labels
-            plot_images(ims, output_to_target(preds), paths, save_dir / f"{desc}_pred.jpg", names)  # pred
+            plot_images(ims, targets, paths, save_dir / f"{desc}_labels.jpg", names)  # 라벨
+            plot_images(ims, output_to_target(preds), paths, save_dir / f"{desc}_pred.jpg", names)  # 예측
 
         callbacks.run("on_val_batch_end", batch_i, ims, targets, paths, shapes, preds)
 
-    # Compute metrics
-    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    # 메트릭 계산
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # numpy로 변환
     if len(stats) and stats[0].any():
         tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir=save_dir, names=names)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        
+        # ignore 클래스 필터링
+        lbls = stats[3].astype(int)
+        lbls = lbls[lbls >= 0]  # ignore 클래스(-1) 제외
+        nt = np.bincount(lbls, minlength=nc)  # 클래스별 타겟 수
+    else:
+        nt = torch.zeros(1)
 
-    # filter out ignore labels when counting the number of gt boxes
-    lbls = stats[3].astype(int)
-    lbls = lbls[lbls >= 0]
-    nt = np.bincount(lbls, minlength=nc)  # number of targets per class
-
-    # Print results
-    pf = "%22s" + "%11i" * 2 + "%11.3g" * 4  # print format
+    # 결과 출력
+    pf = "%22s" + "%11i" * 2 + "%11.3g" * 4  # 출력 형식
     LOGGER.info(pf % ("all", seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
         LOGGER.warning(f"WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels")
 
-    # Print results per class
+    # 클래스별 결과 출력
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(ap_class):
             LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
 
-    # Print speeds
-    t = tuple(x.t / seen * 1e3 for x in dt)  # speeds per image
+    # 속도 출력
+    t = tuple(x.t / seen * 1e3 for x in dt)  # 이미지당 속도
     if not training:
         shape = (batch_size, 3, imgsz, imgsz)
         LOGGER.info(f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}" % t)
 
-    # Plots
+    # 플롯
     if plots:
         confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
-        callbacks.run("on_val_end", nt, tp, fp, p, r, f1, ap, ap50, ap_class, confusion_matrix)
+    callbacks.run("on_val_end", nt, tp, fp, p, r, f1, ap, ap50, ap_class, confusion_matrix)
 
-    # Save JSON
+    # JSON 저장
     if save_json and len(jdict):
         if weights:
             w = Path(weights[0] if isinstance(weights, list) else weights).stem
         else:
             w = f'epoch{epoch}'
-
-        pred_json = str(save_dir / f"{w}_predictions.json")  # predictions
+        pred_json = str(save_dir / f"{w}_predictions.json")  # 예측
         LOGGER.info(f"\nSaving {pred_json}...")
-
         with open(pred_json, "w") as f:
             json.dump(jdict, f, indent=2)
-
-        LOGGER.info(f"\nEvaluating mAP...")
-
-        # Run evaluation: KAIST Multispectral Pedestrian Dataset
+        
+        # KAIST Multispectral Pedestrian Dataset 평가
         try:
-            # HACK: need to generate KAIST_annotation.json for your own validation set
-            if not os.path.exists('utils/eval/KAIST_val-A_annotation.json'):
-                raise FileNotFoundError('Please generate KAIST_annotation.json for your own validation set. (See utils/eval/generate_kaist_ann_json.py)')
-            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_val-A_annotation.json --rstFile {pred_json}")
+            # HACK: validation set에 대한 KAIST_annotation.json 생성 필요
+            ann_file = 'utils/eval/KAIST_val-D_annotation.json'
+            if not os.path.exists(ann_file):
+                raise FileNotFoundError(f'Please generate {ann_file} for your validation set. (See utils/eval/generate_kaist_ann_json.py)')
+            os.system(f"python3 utils/eval/kaisteval.py --annFile {ann_file} --rstFile {pred_json}")
         except Exception as e:
             LOGGER.info(f"kaisteval unable to run: {e}")
 
-    # Return results
-    model.float()  # for training
+    # 결과 반환
+    model.float()  # 학습용
     if not training:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ""
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
@@ -407,7 +358,6 @@ def run(
 
 
 def parse_opt():
-    """Parses command-line options for YOLOv5 model inference configuration."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path")
     parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "yolov5s.pt", help="model path(s)")
@@ -431,8 +381,9 @@ def parse_opt():
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
     parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
+    parser.add_argument("--rgbt", action="store_true", help="use RGB-T input")
     opt = parser.parse_args()
-    opt.data = check_yaml(opt.data)  # check YAML
+    opt.data = check_yaml(opt.data)  # YAML 확인
     opt.save_json |= opt.data.endswith("coco.yaml")
     opt.save_txt |= opt.save_hybrid
     print_args(vars(opt))
@@ -440,38 +391,30 @@ def parse_opt():
 
 
 def main(opt):
-    """Executes YOLOv5 tasks like training, validation, testing, speed, and study benchmarks based on provided
-    options.
-    """
-
-    if opt.task in ("train", "val", "test"):  # run normally
+    if opt.task in ("train", "val", "test"):  # 일반 실행
         if opt.conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
             LOGGER.info(f"WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results")
         if opt.save_hybrid:
             LOGGER.info("WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone")
         run(**vars(opt))
-
     else:
         weights = opt.weights if isinstance(opt.weights, list) else [opt.weights]
         opt.half = torch.cuda.is_available() and opt.device != "cpu"  # FP16 for fastest results
-        if opt.task == "speed":  # speed benchmarks
-            # python val.py --task speed --data coco.yaml --batch 1 --weights yolov5n.pt yolov5s.pt...
+        if opt.task == "speed":  # 속도 벤치마크
             opt.conf_thres, opt.iou_thres, opt.save_json = 0.25, 0.45, False
             for opt.weights in weights:
                 run(**vars(opt), plots=False)
-
-        elif opt.task == "study":  # speed vs mAP benchmarks
-            # python val.py --task study --data coco.yaml --iou 0.7 --weights yolov5n.pt yolov5s.pt...
+        elif opt.task == "study":  # 속도 vs mAP 벤치마크
             for opt.weights in weights:
-                f = f"study_{Path(opt.data).stem}_{Path(opt.weights).stem}.txt"  # filename to save to
-                x, y = list(range(256, 1536 + 128, 128)), []  # x axis (image sizes), y axis
-                for opt.imgsz in x:  # img-size
+                f = f"study_{Path(opt.data).stem}_{Path(opt.weights).stem}.txt"  # 저장할 파일 이름
+                x, y = list(range(256, 1536 + 128, 128)), []  # x축(이미지 크기), y축
+                for opt.imgsz in x:  # 이미지 크기
                     LOGGER.info(f"\nRunning {f} --imgsz {opt.imgsz}...")
                     r, _, t = run(**vars(opt), plots=False)
-                    y.append(r + t)  # results and times
-                np.savetxt(f, y, fmt="%10.4g")  # save
-            subprocess.run(["zip", "-r", "study.zip", "study_*.txt"])
-            plot_val_study(x=x)  # plot
+                    y.append(r + t)  # 결과와 시간
+                np.savetxt(f, y, fmt="%10.4g")  # 저장
+                os.system("zip -r study.zip study_*.txt")
+                plot_val_study(x=x)  # 플롯
         else:
             raise NotImplementedError(f'--task {opt.task} not in ("train", "val", "test", "speed", "study")')
 

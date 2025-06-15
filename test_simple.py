@@ -69,45 +69,27 @@ def save_one_txt(predn, save_conf, shape, file):
             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
 
-def save_one_json(predn, jdict, path, index, class_map, ann_mapping):
+def save_one_json(predn, jdict, path, index, class_map):
     """
     Saves one JSON detection result with image ID, category ID, bounding box, and score.
 
     Example: {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
     """
-
-    image_name = Path(path).stem
-    full_image_name = f"{image_name}.jpg"
-    image_id = ann_mapping.get(full_image_name, -1)  # 딕셔너리에서 즉시 조회
-    
-    if image_id == -1:
-        print(f"Warning: Image {full_image_name} not found in annotations")
-        return
-
-    for p, b in zip(predn.tolist(), predn[:, :4].tolist()):  # ✅ predn에서 bbox 추출
-        jdict.append({
-            "image_name": image_name,
-            "image_id": int(image_id),
-            "category_id": 0,  # 'person' 클래스 고정
-            "bbox": [round(x, 3) for x in b],
-            "score": round(p[4], 5)
-        })
-
-    # image_id = int(path.stem) if path.stem.isnumeric() else path.stem
-    # box = xyxy2xywh(predn[:, :4])  # xywh
-    # box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
-    # for p, b in zip(predn.tolist(), box.tolist()):
-    #     if p[4] < 0.1:
-    #         continue
-    #     jdict.append(
-    #         {
-    #             "image_name": image_id,
-    #             "image_id": int(index),
-    #             "category_id": class_map[int(p[5])],
-    #             "bbox": [round(x, 3) for x in b],
-    #             "score": round(p[4], 5),
-    #         }
-    #     )
+    image_id = int(path.stem) if path.stem.isnumeric() else path.stem
+    box = xyxy2xywh(predn[:, :4])  # xywh
+    box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
+    for p, b in zip(predn.tolist(), box.tolist()):
+        if p[4] < 0.1:
+            continue
+        jdict.append(
+            {
+                "image_name": image_id,
+                "image_id": int(index),
+                "category_id": class_map[int(p[5])],
+                "bbox": [round(x, 3) for x in b],
+                "score": round(p[4], 5),
+            }
+        )
 
 
 def process_batch(detections, labels, iouv):
@@ -242,13 +224,6 @@ def run(
     callbacks.run("on_val_start")
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
 
-    # ann 
-    # 어노테이션 데이터 미리 로드
-    with open('utils/eval/KAIST_val-D_annotation.json', 'r') as f:
-        ann = json.load(f)
-    # 이미지 이름 → ID 매핑 테이블 생성
-    ann_mapping = {img['im_name']: img['id'] for img in ann['images']}  # ✅ 최적화
-
     for batch_i, (ims, targets, paths, shapes, indices) in enumerate(pbar):
         callbacks.run("on_val_batch_start")
         with dt[0]:
@@ -304,12 +279,8 @@ def run(
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            
-            # taehun edit
-            # scale_boxes(ims[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
-            shape, ratio_pad = shapes[si][0], shapes[si][1]
-            scale_boxes(ims[si].shape[1:], predn[:, :4], shape, ratio_pad)
-            
+            scale_boxes(ims[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
+
             # Evaluate
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
@@ -325,8 +296,7 @@ def run(
                 (save_dir / "labels").mkdir(parents=True, exist_ok=True)
                 save_one_txt(predn, save_conf, shape, file=save_dir / "labels" / f"{path.stem}.txt")
             if save_json:
-                save_one_json(predn, jdict, path, index, class_map, ann_mapping)
-                # save_one_json(predn, jdict, path, index, class_map)  # append to COCO-JSON dictionary
+                save_one_json(predn, jdict, path, index, class_map)  # append to COCO-JSON dictionary
             callbacks.run("on_val_image_end", pred, predn, path, names, ims[si])
 
         # Plot images
@@ -389,9 +359,9 @@ def run(
         # Run evaluation: KAIST Multispectral Pedestrian Dataset
         try:
             # HACK: need to generate KAIST_annotation.json for your own validation set
-            if not os.path.exists('utils/eval/KAIST_val-A_annotation.json'):
+            if not os.path.exists('utils/eval/KAIST_val-D_annotation.json'):
                 raise FileNotFoundError('Please generate KAIST_annotation.json for your own validation set. (See utils/eval/generate_kaist_ann_json.py)')
-            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_val-A_annotation.json --rstFile {pred_json}")
+            os.system(f"python3 utils/eval/kaisteval.py --annFile utils/eval/KAIST_val-D_annotation.json --rstFile {pred_json}")
         except Exception as e:
             LOGGER.info(f"kaisteval unable to run: {e}")
 
@@ -416,7 +386,7 @@ def parse_opt():
     parser.add_argument("--conf-thres", type=float, default=0.001, help="confidence threshold")
     parser.add_argument("--iou-thres", type=float, default=0.6, help="NMS IoU threshold")
     parser.add_argument("--max-det", type=int, default=300, help="maximum detections per image")
-    parser.add_argument("--task", default="val", help="train, val, test, speed or study")
+    parser.add_argument("--task", default="test", help="train, val, test, speed or study")
     parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
     parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode)")
     parser.add_argument("--single-cls", action="store_true", help="treat as single-class dataset")
